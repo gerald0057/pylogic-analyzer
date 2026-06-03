@@ -3,16 +3,31 @@ use crate::types::{parse_samplerate, DslHeader};
 
 /// Parse the header text content into a DslHeader struct.
 ///
-/// The header format (from dsl2sigrok analysis):
-/// ```
-/// total probes = 12
-/// samplerate = 25 MHz
-/// total samples = 1400000
-/// total blocks = 500
-/// probe0 = tx
-/// probe1 = sync win
-/// ...
-/// ```
+/// Supports two formats:
+/// 1. INI-style (DSView >= 3):
+///    ```
+///    [version]
+///    version = 3
+///    [header]
+///    driver = DSLogic
+///    total probes = 12
+///    samplerate = 25 MHz
+///    total samples = 1400000
+///    total blocks = 500
+///    probe0 = tx
+///    probe1 = sync win
+///    ...
+///    ```
+/// 2. Flat key=value (legacy / dsl2sigrok):
+///    ```
+///    total probes = 12
+///    samplerate = 25 MHz
+///    total samples = 1400000
+///    total blocks = 500
+///    probe0 = tx
+///    probe1 = sync win
+///    ...
+///    ```
 pub fn parse_header(text: &str) -> Result<DslHeader, String> {
     let mut total_probes: Option<u16> = None;
     let mut samplerate: Option<f64> = None;
@@ -20,45 +35,65 @@ pub fn parse_header(text: &str) -> Result<DslHeader, String> {
     let mut total_blocks: Option<u64> = None;
     let mut probe_names: Vec<(u16, String)> = Vec::new();
 
+    // Track which section we're in. In INI-style, only [header] fields matter.
+    // In flat format, all lines are implicitly in [header].
+    let mut in_header_section = true; // default for flat format
+    let has_sections = text.contains('[');
+
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
 
-        if let Some(rest) = line.strip_prefix("total probes = ") {
-            total_probes = Some(
-                rest.trim()
-                    .parse()
-                    .map_err(|_| format!("invalid total probes: '{}'", rest))?,
-            );
-        } else if let Some(rest) = line.strip_prefix("samplerate = ") {
-            samplerate = Some(parse_samplerate(rest)?);
-        } else if let Some(rest) = line.strip_prefix("total samples = ") {
-            total_samples = Some(
-                rest.trim()
-                    .parse()
-                    .map_err(|_| format!("invalid total samples: '{}'", rest))?,
-            );
-        } else if let Some(rest) = line.strip_prefix("total blocks = ") {
-            total_blocks = Some(
-                rest.trim()
-                    .parse()
-                    .map_err(|_| format!("invalid total blocks: '{}'", rest))?,
-            );
-        } else if let Some(rest) = line.strip_prefix("probe") {
-            let rest = rest.trim();
-            if let Some(eq_pos) = rest.find('=') {
-                let probe_num: u16 = rest[..eq_pos]
-                    .trim()
-                    .parse()
-                    .map_err(|_| format!("invalid probe number in '{}'", line))?;
+        // Handle section markers
+        if has_sections && line.starts_with('[') && line.ends_with(']') {
+            let section = &line[1..line.len() - 1].trim().to_lowercase();
+            in_header_section = section == "header";
+            continue;
+        }
 
-                // Handle probe names with trailing spaces after "probeNUM = "
-                // The name is everything after '=' trimmed, which may contain spaces
-                let name_start = eq_pos + 1;
-                let name = rest[name_start..].trim().to_string();
-                probe_names.push((probe_num, name));
+        // If we're not in [header] section of INI format, skip
+        if !in_header_section {
+            continue;
+        }
+
+        // Parse key = value within current section
+        if let Some((key, value)) = parse_key_value(line) {
+            match key {
+                "total probes" => {
+                    total_probes = Some(
+                        value
+                            .parse()
+                            .map_err(|_| format!("invalid total probes: '{}'", value))?,
+                    );
+                }
+                "samplerate" => {
+                    samplerate = Some(parse_samplerate(value)?);
+                }
+                "total samples" => {
+                    total_samples = Some(
+                        value
+                            .parse()
+                            .map_err(|_| format!("invalid total samples: '{}'", value))?,
+                    );
+                }
+                "total blocks" => {
+                    total_blocks = Some(
+                        value
+                            .parse()
+                            .map_err(|_| format!("invalid total blocks: '{}'", value))?,
+                    );
+                }
+                _ => {
+                    // Maybe a probe line: "probeN = name"
+                    if let Some(rest) = key.strip_prefix("probe") {
+                        if let Ok(probe_num) = rest.trim().parse::<u16>() {
+                            probe_names.push((probe_num, value.to_string()));
+                        }
+                    }
+                    // Ignore other fields (driver, device mode, trigger time, etc.)
+                }
             }
         }
     }
@@ -68,8 +103,7 @@ pub fn parse_header(text: &str) -> Result<DslHeader, String> {
     let total_samples = total_samples.ok_or("missing 'total samples'")?;
     let total_blocks = total_blocks.ok_or("missing 'total blocks'")?;
 
-    // Build ordered probe name list, matching dsl2sigrok behavior:
-    // probe_names vector is indexed by probe number.
+    // Build ordered probe name list, indexed by probe number.
     let max_probe = probe_names
         .iter()
         .map(|(n, _)| *n)
@@ -90,12 +124,23 @@ pub fn parse_header(text: &str) -> Result<DslHeader, String> {
     })
 }
 
+/// Parse a "key = value" line, returning (key, value) or None.
+fn parse_key_value(line: &str) -> Option<(&str, &str)> {
+    let eq_pos = line.find('=')?;
+    let key = line[..eq_pos].trim();
+    let value = line[eq_pos + 1..].trim();
+    if key.is_empty() {
+        return None;
+    }
+    Some((key, value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_basic_header() {
+    fn test_parse_flat_header() {
         let text = "total probes = 2\n\
                     samplerate = 25 MHz\n\
                     total samples = 1000\n\
@@ -113,8 +158,35 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_ini_header() {
+        let text = "[version]\n\
+                    version = 3\n\
+                    [header]\n\
+                    driver = DSLogic\n\
+                    device mode = 0\n\
+                    capturefile = data\n\
+                    total samples = 1000\n\
+                    total probes = 2\n\
+                    total blocks = 5\n\
+                    samplerate = 25 MHz\n\
+                    trigger time = 12345\n\
+                    trigger pos = 0\n\
+                    probe0 = tx\n\
+                    probe1 = rx\n";
+        let h = parse_header(text).unwrap();
+        assert_eq!(h.total_probes, 2);
+        assert!((h.samplerate - 25_000_000.0).abs() < 1.0);
+        assert_eq!(h.total_samples, 1000);
+        assert_eq!(h.total_blocks, 5);
+        assert_eq!(h.probe_names.len(), 2);
+        assert_eq!(h.probe_names[0], "tx");
+        assert_eq!(h.probe_names[1], "rx");
+    }
+
+    #[test]
     fn test_parse_header_with_spaces_in_names() {
-        let text = "total probes = 3\n\
+        let text = "[header]\n\
+                    total probes = 3\n\
                     samplerate = 25 MHz\n\
                     total samples = 1000\n\
                     total blocks = 5\n\

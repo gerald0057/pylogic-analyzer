@@ -39,11 +39,7 @@ def _create_dsl(probe_data, sample_rate=100_000.0):
     n_probes = len(probes)
     n_samples = max(len(v) for v in probe_data.values())
 
-    header = f"""total probes = {n_probes}
-samplerate = {sample_rate} Hz
-total samples = {n_samples}
-total blocks = 1
-"""
+    header = f"[version]\nversion = 3\n[header]\ndriver = DSLogic\ndevice mode = 0\ncapturefile = data\ntotal samples = {n_samples}\ntotal probes = {n_probes}\nsamplerate = {sample_rate} Hz\ntotal blocks = 1\ntrigger time = 0\ntrigger pos = 0\n"
     for i, name in enumerate(probes):
         header += f"probe{i} = {name}\n"
 

@@ -13,13 +13,7 @@ from pylogic import DslReader
 
 def create_minimal_dsl(samples_per_probe=256, probes=2, blocks=1):
     """Create a minimal .dsl file in memory and return bytes."""
-    header_text = f"""total probes = {probes}
-samplerate = 100 kHz
-total samples = {samples_per_probe}
-total blocks = {blocks}
-probe0 = ch_a
-probe1 = ch_b
-"""
+    header_text = f"[version]\nversion = 3\n[header]\ndriver = DSLogic\ndevice mode = 0\ncapturefile = data\ntotal samples = {samples_per_probe}\ntotal probes = {probes}\nsamplerate = 100 kHz\ntotal blocks = {blocks}\ntrigger time = 0\ntrigger pos = 0\nprobe0 = ch_a\nprobe1 = ch_b\n"
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -105,14 +99,7 @@ def test_channel_reading():
 
 def test_channel_name_with_spaces():
     """Test header parsing with spaces in probe names."""
-    header_text = """total probes = 3
-samplerate = 25 MHz
-total samples = 1000
-total blocks = 5
-probe0 = sync win
-probe1 = sync pul
-probe2 = tx
-"""
+    header_text = "[version]\nversion = 3\n[header]\ndriver = DSLogic\ndevice mode = 0\ncapturefile = data\ntotal samples = 1000\ntotal probes = 3\nsamplerate = 25 MHz\ntotal blocks = 5\ntrigger time = 0\ntrigger pos = 0\nprobe0 = sync win\nprobe1 = sync pul\nprobe2 = tx\n"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("header", header_text)
